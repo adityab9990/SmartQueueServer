@@ -1,6 +1,7 @@
 package com.example.queuemanagement.controller;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,10 +14,11 @@ import com.example.queuemanagement.model.User;
 import com.example.queuemanagement.repository.AppointmentRepository;
 import com.example.queuemanagement.repository.DoctorRepository;
 import com.example.queuemanagement.repository.UserRepository;
+import com.example.queuemanagement.service.EmailService;
 
 @RestController
 @RequestMapping("/api/queue")
-@CrossOrigin(origins = "http://localhost:3000") // Allow React Frontend
+@CrossOrigin(origins = "http://localhost:3000")
 public class QueueController {
 
     @Autowired
@@ -27,18 +29,19 @@ public class QueueController {
 
     @Autowired
     private DoctorRepository doctorRepository;
+    
+    @Autowired
+    private EmailService emailService;
 
     // ==========================================
     // 1. PATIENT ENDPOINTS
     // ==========================================
 
-    // Get all doctors for the dropdown
     @GetMapping("/doctors")
     public List<Doctor> getAvailableDoctors() {
         return doctorRepository.findAll();
     }
 
-    // Book Appointment
     @PostMapping("/book")
     public ResponseEntity<?> bookAppointment(@RequestBody BookingRequest request) {
         if (request.getDoctorId() == null) {
@@ -51,66 +54,101 @@ public class QueueController {
         }
         Doctor doctor = doctorOpt.get();
 
-        // Calculate Token: Find max token for this specific doctor
+        // 1. Check for duplicate booking
+        Appointment existing = appointmentRepository.findFirstByPatientNameAndStatusNot(request.getPatientName(), "COMPLETED");
+        if (existing != null && !"CANCELLED".equals(existing.getStatus())) {
+             return ResponseEntity.badRequest().body("You already have an active appointment (Token #" + existing.getTokenNumber() + ")");
+        }
+
+        // 2. Calculate Token
         Integer maxToken = appointmentRepository.findMaxTokenByDoctor(doctor.getId());
         int nextToken = (maxToken == null ? 0 : maxToken) + 1;
 
+        // 3. Create Appointment
         Appointment appt = new Appointment();
-        appt.setPatientName(request.getPatientName());
+        appt.setPatientName(request.getPatientName()); // Keep Email here for ID purposes
         appt.setDoctor(doctor);
         appt.setTokenNumber(nextToken);
         appt.setStatus("WAITING");
 
-        return ResponseEntity.ok(appointmentRepository.save(appt));
+        Appointment savedAppt = appointmentRepository.save(appt);
+
+        // 4. ✅ SEND EMAIL (Using Real Name)
+        try {
+            // Fetch the User details to get the Real Name
+            User patientUser = userRepository.findByUsername(request.getPatientName()).orElse(null);
+            
+            // If name exists, use it. Otherwise, fallback to email.
+            String realName = (patientUser != null && patientUser.getName() != null) ? patientUser.getName() : request.getPatientName();
+            
+            emailService.sendBookingConfirmation(
+                request.getPatientName(), // Send TO: Email
+                realName,                 // Address as: Real Name (e.g., "Dear Aditya")
+                doctor.getName(), 
+                nextToken
+            );
+        } catch (Exception e) {
+            System.err.println("Failed to send booking email: " + e.getMessage());
+        }
+
+        return ResponseEntity.ok(savedAppt);
     }
 
-    // Get Patient Status
-    @GetMapping("/patient/{name}")
+    @GetMapping("/patient/status/{name}")
     public ResponseEntity<?> getPatientStatus(@PathVariable String name) {
         Appointment appt = appointmentRepository.findFirstByPatientNameAndStatusNot(name, "COMPLETED");
-        if (appt == null) return ResponseEntity.notFound().build();
+        if (appt == null) {
+            return ResponseEntity.ok(Map.of("message", "No active appointments"));
+        }
         return ResponseEntity.ok(appt);
     }
-
-    // Get History
+    
     @GetMapping("/history/{name}")
-    public List<Appointment> getPatientHistory(@PathVariable String name) {
-        return appointmentRepository.findByPatientName(name);
+    public ResponseEntity<?> getPatientHistory(@PathVariable String name) {
+        System.out.println("🔍 Fetching History for User: " + name); 
+        List<Appointment> history = appointmentRepository.findByPatientName(name);
+        return ResponseEntity.ok(history);
     }
 
-    // Global "Now Serving" (Optional)
     @GetMapping("/current-serving")
     public ResponseEntity<?> getCurrentServing() {
         Appointment current = appointmentRepository.findFirstByStatusOrderByTokenNumberAsc("ACTIVE");
-        return ResponseEntity.ok(current == null ? 0 : current.getTokenNumber());
+        
+        if (current == null) {
+            current = appointmentRepository.findFirstByStatusOrderByTokenNumberAsc("WAITING");
+        }
+
+        if (current != null) {
+            return ResponseEntity.ok(Map.of(
+                "token", current.getTokenNumber(),
+                "doctor", current.getDoctor().getName()
+            ));
+        }
+        return ResponseEntity.ok(Map.of("token", "None", "doctor", "-"));
     }
 
     // ==========================================
     // 2. DOCTOR DASHBOARD ENDPOINTS
     // ==========================================
 
-    // ✅ Get Doctor Profile by Username (Links Login -> Doctor Profile)
     @GetMapping("/doctor-profile/{username}")
     public ResponseEntity<?> getDoctorProfile(@PathVariable String username) {
         User user = userRepository.findByUsername(username).orElse(null);
         if (user == null) return ResponseEntity.notFound().build();
 
-        // Assuming Doctor table has a 'doctor_id' column linked to User ID
-        Doctor doctor = doctorRepository.findByDoctorId(user.getId()).orElse(null);
+        Optional<Doctor> doctorOpt = doctorRepository.findByDoctorId(user.getId());
         
-        if (doctor == null) {
-            return ResponseEntity.badRequest().body("Profile not found. Is this user linked to a doctor?");
+        if (doctorOpt.isEmpty()) {
+            return ResponseEntity.badRequest().body("Profile not found.");
         }
-        return ResponseEntity.ok(doctor);
+        return ResponseEntity.ok(doctorOpt.get());
     }
 
-    // ✅ Get Waiting List for Specific Doctor
     @GetMapping("/doctor/{doctorId}/waiting")
     public List<Appointment> getDoctorWaitingList(@PathVariable Long doctorId) {
         return appointmentRepository.findByDoctorIdAndStatus(doctorId, "WAITING");
     }
 
-    // ✅ Get Current Active Patient for Specific Doctor
     @GetMapping("/doctor/{doctorId}/current")
     public ResponseEntity<?> getDoctorCurrentPatient(@PathVariable Long doctorId) {
         List<Appointment> activeList = appointmentRepository.findByDoctorIdAndStatus(doctorId, "ACTIVE");
@@ -118,20 +156,16 @@ public class QueueController {
         return ResponseEntity.ok(activeList.get(0));
     }
 
-    // ✅ Update Status (Call Next / Mark Completed)
     @PutMapping("/appointment/{id}/status")
     public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestParam String status) {
         Optional<Appointment> apptOpt = appointmentRepository.findById(id);
         if (apptOpt.isEmpty()) return ResponseEntity.notFound().build();
 
         Appointment appt = apptOpt.get();
-        appt.setStatus(status); // "ACTIVE" or "COMPLETED"
+        appt.setStatus(status); 
         return ResponseEntity.ok(appointmentRepository.save(appt));
     }
 
-    // ==========================================
-    // DTO CLASS
-    // ==========================================
     public static class BookingRequest {
         private String patientName;
         private Long doctorId;

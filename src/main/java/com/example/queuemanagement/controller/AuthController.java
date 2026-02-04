@@ -24,21 +24,32 @@ public class AuthController {
     private EmailService emailService;
 
     // ==========================================
-    // 1. REGISTER (Updated Logic)
+    // 1. REGISTER (Updated to save Name & Mobile)
     // ==========================================
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody User user) {
+        
         // 1. Check if user already exists
         if (userRepository.findByUsername(user.getUsername()).isPresent()) {
             return ResponseEntity.badRequest().body("Email/Username already exists");
         }
 
-        // 2. PATIENT Logic: Needs OTP Verification
+        // 2. Ensure Role is set (Default to PATIENT if missing)
+        if (user.getRole() == null || user.getRole().isEmpty()) {
+            user.setRole("PATIENT");
+        }
+        
+        // ✅ 3. EXPLICITLY SET NAME AND MOBILE (Just to be safe)
+        // This ensures the JSON data from React is actually used
+        user.setName(user.getName());
+        user.setMobile(user.getMobile());
+
+        // 4. PATIENT Logic: Needs OTP Verification
         if ("PATIENT".equalsIgnoreCase(user.getRole())) {
             String otp = String.valueOf(new Random().nextInt(9000) + 1000); // Generate 4-digit OTP
             user.setOtp(otp);
             user.setVerified(false); // Mark as NOT verified
-            userRepository.save(user);
+            userRepository.save(user); // Save to DB
 
             try {
                 emailService.sendOtpEmail(user.getUsername(), otp);
@@ -48,7 +59,7 @@ public class AuthController {
             }
         } 
         
-        // 3. DOCTOR / ADMIN Logic: Auto-Verify (No OTP needed)
+        // 5. DOCTOR / ADMIN Logic: Auto-Verify (No OTP needed)
         else {
             user.setVerified(true); // Automatically verified
             user.setOtp(null);      // No OTP needed
@@ -121,10 +132,13 @@ public class AuthController {
         public void setPassword(String password) { this.password = password; }
     }
     
+    // ==========================================
+    // 4. GOOGLE LOGIN (Updated to save Name)
+    // ==========================================
     @PostMapping("/google-login")
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> request) {
         String email = request.get("email");
-        String name = request.get("name");
+        String name = request.get("name"); // React sends "name"
 
         // 1. Check if user exists
         Optional<User> userOpt = userRepository.findByUsername(email);
@@ -138,6 +152,10 @@ public class AuthController {
             newUser.setUsername(email);
             newUser.setPassword("GOOGLE_USER"); // Dummy password
             newUser.setRole("PATIENT");
+            
+            // ✅ Save the Name from Google
+            newUser.setName(name); 
+            
             newUser.setVerified(true); // Google emails are already verified
             
             userRepository.save(newUser);

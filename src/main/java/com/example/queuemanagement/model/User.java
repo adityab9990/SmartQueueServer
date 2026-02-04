@@ -31,7 +31,15 @@ public class User {
 
     // ✅ ADD THESE TWO NEW FIELDS
     private String name;          // For Doctor's Full Name
-    private String specialization; // For Doctor's Specialization
+    private String specialization;
+    private String mobile;
+ 
+	public String getMobile() {
+		return mobile;
+	}
+	public void setMobile(String mobile) {
+		this.mobile = mobile;
+	}
 	public String getUsername() {
 		return username;
 	}
