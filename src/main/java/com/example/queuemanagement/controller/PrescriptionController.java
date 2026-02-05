@@ -1,8 +1,8 @@
 package com.example.queuemanagement.controller;
 
-import java.io.ByteArrayOutputStream;
-import java.util.Date;
-
+import com.example.queuemanagement.dto.PrescriptionRequest;
+import com.example.queuemanagement.service.EmailService;
+import com.example.queuemanagement.service.PdfService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -10,115 +10,80 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import com.example.queuemanagement.service.EmailService;
-import com.itextpdf.text.*;
-import com.itextpdf.text.pdf.*;
-
 @RestController
 @RequestMapping("/api/prescription")
 @CrossOrigin(origins = "http://localhost:3000")
 public class PrescriptionController {
 
     @Autowired
+    private PdfService pdfService;
+
+    @Autowired
     private EmailService emailService;
 
     // ==========================================
-    // 1. DOWNLOAD PDF (Browser)
+    // 1. ✅ EMAIL the Prescription
     // ==========================================
-    @GetMapping("/download/{patientName}")
-    public ResponseEntity<byte[]> downloadPrescription(
-            @PathVariable String patientName,
-            @RequestParam(defaultValue = "Dr. General") String doctorName,
-            @RequestParam(defaultValue = "General Checkup") String diagnosis) {
-
+    @PostMapping("/send")
+    public ResponseEntity<?> sendPrescription(@RequestBody PrescriptionRequest request) {
         try {
-            byte[] pdfBytes = generatePdfBytes(patientName, doctorName, diagnosis);
+            // 1. Generate PDF using the new PdfService
+            byte[] pdfBytes = pdfService.generatePrescriptionPdf(request);
+            
+            // 2. Send Email
+            emailService.sendEmailWithAttachment(
+                request.getEmail(),
+                "Prescription - Dr. " + request.getDoctorName(),
+                "Dear " + request.getPatientName() + ",\n\nPlease find your prescription attached.\n\nGet well soon,\nSmart Hospital Team",
+                pdfBytes,
+                "Prescription.pdf"
+            );
+            
+            return ResponseEntity.ok("Email Sent Successfully!");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("Error: " + e.getMessage());
+        }
+    }
 
+    // ==========================================
+    // 2. ✅ DOWNLOAD the Prescription (For Doctor Verification)
+    // ==========================================
+    @PostMapping("/download-pdf")
+    public ResponseEntity<byte[]> downloadPrescriptionPdf(@RequestBody PrescriptionRequest request) {
+        try {
+            // 1. Generate PDF
+            byte[] pdfBytes = pdfService.generatePrescriptionPdf(request);
+
+            // 2. Return as Downloadable File
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_PDF);
-            headers.setContentDispositionFormData("filename", patientName + "_Prescription.pdf");
+            headers.setContentDispositionFormData("filename", "Prescription_" + request.getPatientName() + ".pdf");
 
             return new ResponseEntity<>(pdfBytes, headers, HttpStatus.OK);
-
+            
         } catch (Exception e) {
             e.printStackTrace();
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
-
+    
     // ==========================================
-    // 2. ✅ NEW: EMAIL PDF
+    // 3. (Optional) Legacy GET Download - Kept for compatibility if needed
     // ==========================================
-    @PostMapping("/email")
-    public ResponseEntity<?> emailPrescription(
-            @RequestParam String email,
-            @RequestParam String patientName,
-            @RequestParam String doctorName,
-            @RequestParam String diagnosis) {
-
-        try {
-            // 1. Generate PDF
-            byte[] pdfBytes = generatePdfBytes(patientName, doctorName, diagnosis);
-
-            // 2. Send Email
-            String subject = "Prescription from " + doctorName;
-            String body = "Dear " + patientName + ",\n\nPlease find your prescription attached.\n\nGet well soon,\nSmart Hospital Team";
-            
-            emailService.sendEmailWithAttachment(email, subject, body, pdfBytes, "Prescription.pdf");
-
-            return ResponseEntity.ok("Email Sent Successfully!");
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(500).body("Error sending email: " + e.getMessage());
-        }
-    }
-
-    // ==========================================
-    // HELPER: PDF GENERATION LOGIC
-    // ==========================================
-    private byte[] generatePdfBytes(String patientName, String doctorName, String diagnosis) throws Exception {
-        Document document = new Document();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        PdfWriter.getInstance(document, out);
-
-        document.open();
-
-        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 24);
-        Paragraph header = new Paragraph("🏥 SMART CITY HOSPITAL", headerFont);
-        header.setAlignment(Element.ALIGN_CENTER);
-        document.add(header);
-
-        document.add(new Paragraph("\n----------------------------------------------------------------------------------\n"));
-
-        PdfPTable table = new PdfPTable(2);
-        table.setWidthPercentage(100);
-        addTableRow(table, "Doctor Name:", doctorName);
-        addTableRow(table, "Patient Name:", patientName);
-        addTableRow(table, "Diagnosis:", diagnosis);
-        addTableRow(table, "Date:", new Date().toString());
-        document.add(table);
-
-        document.add(new Paragraph("\n\n💊 Prescribed Medicines:\n", FontFactory.getFont(FontFactory.HELVETICA_BOLD, 16)));
+    @GetMapping("/download/{patientName}")
+    public ResponseEntity<byte[]> downloadLegacy(
+            @PathVariable String patientName,
+            @RequestParam(defaultValue = "Dr. General") String doctorName,
+            @RequestParam(defaultValue = "General Checkup") String diagnosis) {
         
-        com.itextpdf.text.List list = new com.itextpdf.text.List(true, false, 20);
-        list.add(new ListItem("Paracetamol 500mg - (Morning, Night)"));
-        list.add(new ListItem("Amoxicillin 250mg - (Afternoon)"));
-        list.add(new ListItem("Vitamin C - (Morning)"));
-        document.add(list);
-
-        document.add(new Paragraph("\n\n\n\n(Signature)\n" + doctorName));
+        // Create a temporary request object to reuse logic
+        PrescriptionRequest req = new PrescriptionRequest();
+        req.setPatientName(patientName);
+        req.setDoctorName(doctorName);
+        req.setDiagnosis(diagnosis);
+        req.setMedicines("Standard Medicines"); // Default
         
-        document.close();
-        return out.toByteArray();
-    }
-
-    private void addTableRow(PdfPTable table, String label, String value) {
-        PdfPCell cell1 = new PdfPCell(new Phrase(label, FontFactory.getFont(FontFactory.HELVETICA_BOLD)));
-        cell1.setBorder(0);
-        table.addCell(cell1);
-        PdfPCell cell2 = new PdfPCell(new Phrase(value));
-        cell2.setBorder(0);
-        table.addCell(cell2);
+        return downloadPrescriptionPdf(req);
     }
 }

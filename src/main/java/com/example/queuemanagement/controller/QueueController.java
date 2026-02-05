@@ -54,7 +54,7 @@ public class QueueController {
         }
         Doctor doctor = doctorOpt.get();
 
-        // 1. Check for duplicate booking
+        // 1. Check for duplicate booking (Exclude CANCELLED so they can re-book)
         Appointment existing = appointmentRepository.findFirstByPatientNameAndStatusNot(request.getPatientName(), "COMPLETED");
         if (existing != null && !"CANCELLED".equals(existing.getStatus())) {
              return ResponseEntity.badRequest().body("You already have an active appointment (Token #" + existing.getTokenNumber() + ")");
@@ -66,24 +66,21 @@ public class QueueController {
 
         // 3. Create Appointment
         Appointment appt = new Appointment();
-        appt.setPatientName(request.getPatientName()); // Keep Email here for ID purposes
+        appt.setPatientName(request.getPatientName()); 
         appt.setDoctor(doctor);
         appt.setTokenNumber(nextToken);
         appt.setStatus("WAITING");
 
         Appointment savedAppt = appointmentRepository.save(appt);
 
-        // 4. ✅ SEND EMAIL (Using Real Name)
+        // 4. Send Email (Using Real Name)
         try {
-            // Fetch the User details to get the Real Name
             User patientUser = userRepository.findByUsername(request.getPatientName()).orElse(null);
-            
-            // If name exists, use it. Otherwise, fallback to email.
             String realName = (patientUser != null && patientUser.getName() != null) ? patientUser.getName() : request.getPatientName();
             
             emailService.sendBookingConfirmation(
                 request.getPatientName(), // Send TO: Email
-                realName,                 // Address as: Real Name (e.g., "Dear Aditya")
+                realName,                 // Address as: Real Name
                 doctor.getName(), 
                 nextToken
             );
@@ -94,9 +91,38 @@ public class QueueController {
         return ResponseEntity.ok(savedAppt);
     }
 
+    // ✅ NEW: Cancel Appointment
+    @PutMapping("/cancel/{id}")
+    public ResponseEntity<?> cancelAppointment(@PathVariable Long id) {
+        Optional<Appointment> apptOpt = appointmentRepository.findById(id);
+        
+        if (apptOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Appointment appt = apptOpt.get();
+        
+        // Validation: Cannot cancel if already completed
+        if ("COMPLETED".equals(appt.getStatus())) {
+            return ResponseEntity.badRequest().body("Cannot cancel a completed appointment.");
+        }
+
+        appt.setStatus("CANCELLED");
+        appointmentRepository.save(appt);
+        
+        return ResponseEntity.ok("Appointment Cancelled Successfully");
+    }
+
     @GetMapping("/patient/status/{name}")
     public ResponseEntity<?> getPatientStatus(@PathVariable String name) {
+        // Find the active appointment (Not COMPLETED)
         Appointment appt = appointmentRepository.findFirstByPatientNameAndStatusNot(name, "COMPLETED");
+        
+        // If the found appointment is CANCELLED, treat it as "No active appointment"
+        if (appt != null && "CANCELLED".equals(appt.getStatus())) {
+            return ResponseEntity.ok(Map.of("message", "No active appointments"));
+        }
+
         if (appt == null) {
             return ResponseEntity.ok(Map.of("message", "No active appointments"));
         }
@@ -119,9 +145,12 @@ public class QueueController {
         }
 
         if (current != null) {
+            // ✅ Safety Check for Null Doctor
+            String doctorName = (current.getDoctor() != null) ? current.getDoctor().getName() : "Unknown Doctor";
+            
             return ResponseEntity.ok(Map.of(
                 "token", current.getTokenNumber(),
-                "doctor", current.getDoctor().getName()
+                "doctor", doctorName
             ));
         }
         return ResponseEntity.ok(Map.of("token", "None", "doctor", "-"));
@@ -146,6 +175,7 @@ public class QueueController {
 
     @GetMapping("/doctor/{doctorId}/waiting")
     public List<Appointment> getDoctorWaitingList(@PathVariable Long doctorId) {
+        // ✅ Ensure we don't show CANCELLED patients in the doctor's list
         return appointmentRepository.findByDoctorIdAndStatus(doctorId, "WAITING");
     }
 
