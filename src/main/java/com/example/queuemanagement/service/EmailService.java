@@ -18,7 +18,7 @@ public class EmailService {
     // 1. OTP Email
     public void sendOtpEmail(String toEmail, String otp) {
         SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom("adityabhalerao2818@gmail.com"); 
+        message.setFrom("smartqueuehospitalmanagement@gmail.com"); 
         message.setTo(toEmail);
         message.setSubject("Hospital Queue - Verify Your Registration");
         message.setText("Your OTP for registration is: " + otp + "\n\nThis code is valid for 5 minutes.");
@@ -32,7 +32,7 @@ public class EmailService {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true);
         
-        helper.setFrom("adityabhalerao2818@gmail.com");
+        helper.setFrom("smartqueuehospitalmanagement@gmail.com");
         helper.setTo(to);
         helper.setSubject(subject);
         helper.setText(body);
@@ -44,7 +44,7 @@ public class EmailService {
 
     public void sendBookingConfirmation(String toEmail, String patientName, String doctorName, int tokenNumber) {
         SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom("adityabhalerao2818@gmail.com");
+        message.setFrom("smartqueuehospitalmanagement@gmail.com");
         message.setTo(toEmail);
         message.setSubject("Appointment Confirmed - Token #" + tokenNumber);
         
