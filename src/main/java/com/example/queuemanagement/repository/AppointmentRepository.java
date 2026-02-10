@@ -35,4 +35,6 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long> 
     void deleteByPatientName(@Param("patientName") String patientName);
 
 	Appointment findFirstByPatientNameAndStatusNot(String patientName, String string);
+	
+	
 }
